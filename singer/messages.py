@@ -1,34 +1,47 @@
+from __future__ import annotations
+
+import decimal
 import sys
 
-import pytz
-import orjson
-import decimal
 import ciso8601
+import msgspec
+import pytz
 
 import singer.utils as u
+
 from .logger import get_logger
+
 LOGGER = get_logger()
 
-class Message():
-    '''Base class for messages.'''
+# A Global variable to hold the msgspec encoder.
+ENCODER = None
+
+# Allocate a single shared buffer Message buffer for msgspec
+# This buffer will dynamically expand as required but will not shrink.
+# https://jcristharif.com/msgspec/perf-tips.html
+msg_buffer = bytearray()
+
+
+class Message:
+    """Base class for messages."""
 
     def asdict(self):  # pylint: disable=no-self-use
-        raise Exception('Not implemented')
+        raise Exception("Not implemented")
 
     def __eq__(self, other):
         return isinstance(other, Message) and self.asdict() == other.asdict()
 
     def __repr__(self):
-        pairs = [f'{k}={v}' for k, v in self.asdict().items()]
-        attrstr = ', '.join(pairs)
-        return f'{self.__class__.__name__}({attrstr})'
+        pairs = [f"{k}={v}" for k, v in self.asdict().items()]
+        attrstr = ", ".join(pairs)
+        return f"{self.__class__.__name__}({attrstr})"
 
     def __str__(self):
         return str(self.asdict())
 
 
 class RecordMessage(Message):
-    '''RECORD message.
+    """RECORD message.
 
     The RECORD message has these fields:
 
@@ -42,7 +55,7 @@ class RecordMessage(Message):
         stream='users',
         record={'id': 1, 'name': 'Mary'})
 
-    '''
+    """
 
     def __init__(self, stream, record, version=None, time_extracted=None):
         self.stream = stream
@@ -50,20 +63,22 @@ class RecordMessage(Message):
         self.version = version
         self.time_extracted = time_extracted
         if time_extracted and not time_extracted.tzinfo:
-            raise ValueError("'time_extracted' must be either None " +
-                             'or an aware datetime (with a time zone)')
+            raise ValueError(
+                "'time_extracted' must be either None "
+                + "or an aware datetime (with a time zone)"
+            )
 
     def asdict(self):
         result = {
-            'type': 'RECORD',
-            'stream': self.stream,
-            'record': self.record,
+            "type": "RECORD",
+            "stream": self.stream,
+            "record": self.record,
         }
         if self.version is not None:
-            result['version'] = self.version
+            result["version"] = self.version
         if self.time_extracted:
             as_utc = self.time_extracted.astimezone(pytz.utc)
-            result['time_extracted'] = u.strftime(as_utc)
+            result["time_extracted"] = u.strftime(as_utc)
         return result
 
     def __str__(self):
@@ -71,7 +86,7 @@ class RecordMessage(Message):
 
 
 class SchemaMessage(Message):
-    '''SCHEMA message.
+    """SCHEMA message.
 
     The SCHEMA message has these fields:
 
@@ -89,8 +104,11 @@ class SchemaMessage(Message):
                },
         key_properties=['id'])
 
-    '''
-    def __init__(self, stream, schema, key_properties, bookmark_properties=None):
+    """
+
+    def __init__(
+        self, stream, schema, key_properties, bookmark_properties=None
+    ):
         self.stream = stream
         self.schema = schema
         self.key_properties = key_properties
@@ -98,24 +116,26 @@ class SchemaMessage(Message):
         if isinstance(bookmark_properties, (str, bytes)):
             bookmark_properties = [bookmark_properties]
         if bookmark_properties and not isinstance(bookmark_properties, list):
-            raise Exception('bookmark_properties must be a string or list of strings')
+            raise Exception(
+                "bookmark_properties must be a string or list of strings"
+            )
 
         self.bookmark_properties = bookmark_properties
 
     def asdict(self):
         result = {
-            'type': 'SCHEMA',
-            'stream': self.stream,
-            'schema': self.schema,
-            'key_properties': self.key_properties
+            "type": "SCHEMA",
+            "stream": self.stream,
+            "schema": self.schema,
+            "key_properties": self.key_properties,
         }
         if self.bookmark_properties:
-            result['bookmark_properties'] = self.bookmark_properties
+            result["bookmark_properties"] = self.bookmark_properties
         return result
 
 
 class StateMessage(Message):
-    '''STATE message.
+    """STATE message.
 
     The STATE message has one field:
 
@@ -124,19 +144,17 @@ class StateMessage(Message):
     msg = singer.StateMessage(
         value={'users': '2017-06-19T00:00:00'})
 
-    '''
+    """
+
     def __init__(self, value):
         self.value = value
 
     def asdict(self):
-        return {
-            'type': 'STATE',
-            'value': self.value
-        }
+        return {"type": "STATE", "value": self.value}
 
 
 class ActivateVersionMessage(Message):
-    '''ACTIVATE_VERSION message (EXPERIMENTAL).
+    """ACTIVATE_VERSION message (EXPERIMENTAL).
 
     The ACTIVATE_VERSION messages has these fields:
 
@@ -155,37 +173,40 @@ class ActivateVersionMessage(Message):
         stream='users',
         version=2)
 
-    '''
+    """
+
     def __init__(self, stream, version):
         self.stream = stream
         self.version = version
 
     def asdict(self):
         return {
-            'type': 'ACTIVATE_VERSION',
-            'stream': self.stream,
-            'version': self.version
+            "type": "ACTIVATE_VERSION",
+            "stream": self.stream,
+            "version": self.version,
         }
 
 
 class BatchMessage(Message):
-    """ BATCH message (EXPERIMENTAL).
+    """BATCH message (EXPERIMENTAL).
 
     The BATCH message has these fields:
 
       * stream (string) - The name of the stream.
       * filepath (string) - The location of a batch file. e.g. '/tmp/users001.jsonl'.
       * format (string, optional) - An indication of serialization format.
-            If none is provided, 'jsonl' will be assumed. e.g. 'csv'.
-      * compression (string, optional) - An indication of file compression format. e.g. 'gzip'.
+        If none is provided, 'jsonl' will be assumed. e.g. 'csv'.
+      * compression (string, optional) - An indication of file compression format.
+        e.g. 'gzip'.
       * batch_size (int, optional) - Number of records in this batch. e.g. 100000.
-      * time_extracted (datetime, optional) - TZ-aware datetime with batch extraction time.
+      * time_extracted (datetime, optional) - TZ-aware datetime with batch
+        extraction time.
 
     If file_properties are not provided, uncompressed jsonl files are assumed.
 
-    A BATCH record points to a collection of messages (from a single stream) serialized to disk,
-    and is implemented for performance reasons. Most Taps and Targets should not need to use
-    BATCH messages at all.
+    A BATCH record points to a collection of messages (from a single stream)
+    serialized to disk, and is implemented for performance reasons. Most Taps
+    and Targets should not need to use BATCH messages at all.
 
     msg = singer.BatchMessage(
         stream='users',
@@ -195,33 +216,40 @@ class BatchMessage(Message):
     """
 
     def __init__(
-        self, stream, filepath, file_format=None, compression=None,
-        batch_size=None, time_extracted=None
+        self,
+        stream,
+        filepath,
+        file_format=None,
+        compression=None,
+        batch_size=None,
+        time_extracted=None,
     ):
         self.stream = stream
         self.filepath = filepath
-        self.format = file_format or 'jsonl'
+        self.format = file_format or "jsonl"
         self.compression = compression
         self.batch_size = batch_size
         self.time_extracted = time_extracted
         if time_extracted and not time_extracted.tzinfo:
-            raise ValueError("'time_extracted' must be either None " +
-                             'or an aware datetime (with a time zone)')
+            raise ValueError(
+                "'time_extracted' must be either None "
+                + "or an aware datetime (with a time zone)"
+            )
 
     def asdict(self):
         result = {
-            'type': 'BATCH',
-            'stream': self.stream,
-            'filepath': self.filepath,
-            'format': self.format
+            "type": "BATCH",
+            "stream": self.stream,
+            "filepath": self.filepath,
+            "format": self.format,
         }
         if self.compression is not None:
-            result['compression'] = self.compression
+            result["compression"] = self.compression
         if self.batch_size is not None:
-            result['batch_size'] = self.batch_size
+            result["batch_size"] = self.batch_size
         if self.time_extracted:
             as_utc = self.time_extracted.astimezone(pytz.utc)
-            result['time_extracted'] = u.strftime(as_utc)
+            result["time_extracted"] = u.strftime(as_utc)
         return result
 
 
@@ -240,68 +268,135 @@ def parse_message(msg):
     # lossy conversions.  However, this will affect
     # very few data points and we have chosen to
     # leave conversion as is for now.
-    obj = orjson.loads(msg)
-    msg_type = _required_key(obj, 'type')
+    dec = msgspec.json.Decoder(float_hook=decimal.Decimal)
+    obj = dec.decode(msg)
+    msg_type = _required_key(obj, "type")
 
-    if msg_type == 'RECORD':
-        time_extracted = obj.get('time_extracted')
+    if msg_type == "RECORD":
+        time_extracted = obj.get("time_extracted")
         if time_extracted:
             try:
                 time_extracted = ciso8601.parse_datetime(time_extracted)
             except Exception:
-                LOGGER.warning('unable to parse time_extracted with ciso8601 library')
+                LOGGER.warning(
+                    "unable to parse time_extracted with ciso8601 library"
+                )
                 time_extracted = None
 
-
             # time_extracted = dateutil.parser.parse(time_extracted)
-        return RecordMessage(stream=_required_key(obj, 'stream'),
-                             record=_required_key(obj, 'record'),
-                             version=obj.get('version'),
-                             time_extracted=time_extracted)
+        return RecordMessage(
+            stream=_required_key(obj, "stream"),
+            record=_required_key(obj, "record"),
+            version=obj.get("version"),
+            time_extracted=time_extracted,
+        )
 
-    if msg_type == 'SCHEMA':
-        return SchemaMessage(stream=_required_key(obj, 'stream'),
-                             schema=_required_key(obj, 'schema'),
-                             key_properties=_required_key(obj, 'key_properties'),
-                             bookmark_properties=obj.get('bookmark_properties'))
+    if msg_type == "SCHEMA":
+        return SchemaMessage(
+            stream=_required_key(obj, "stream"),
+            schema=_required_key(obj, "schema"),
+            key_properties=_required_key(obj, "key_properties"),
+            bookmark_properties=obj.get("bookmark_properties"),
+        )
 
-    if msg_type == 'STATE':
-        return StateMessage(value=_required_key(obj, 'value'))
+    if msg_type == "STATE":
+        return StateMessage(value=_required_key(obj, "value"))
 
-    if msg_type == 'ACTIVATE_VERSION':
-        return ActivateVersionMessage(stream=_required_key(obj, 'stream'),
-                                      version=_required_key(obj, 'version'))
+    if msg_type == "ACTIVATE_VERSION":
+        return ActivateVersionMessage(
+            stream=_required_key(obj, "stream"),
+            version=_required_key(obj, "version"),
+        )
 
-    if msg_type == 'BATCH':
-        time_extracted = obj.get('time_extracted')
+    if msg_type == "BATCH":
+        time_extracted = obj.get("time_extracted")
         if time_extracted:
             try:
                 time_extracted = ciso8601.parse_datetime(time_extracted)
             except Exception:
-                LOGGER.warning('Unable to parse time_extracted with ciso8601 library')
+                LOGGER.warning(
+                    "Unable to parse time_extracted with ciso8601 library"
+                )
                 time_extracted = None
 
         return BatchMessage(
-            stream=_required_key(obj, 'stream'),
-            filepath=_required_key(obj, 'filepath'),
-            file_format=_required_key(obj, 'format'),
-            compression=obj.get('compression'),
-            batch_size=obj.get('batch_size'),
-            time_extracted=time_extracted
+            stream=_required_key(obj, "stream"),
+            filepath=_required_key(obj, "filepath"),
+            file_format=_required_key(obj, "format"),
+            compression=obj.get("compression"),
+            batch_size=obj.get("batch_size"),
+            time_extracted=time_extracted,
         )
 
     return None
 
+
 def format_message(message, option=0):
-    def default(obj):
-        if isinstance(obj, decimal.Decimal):
-            return int(obj) if float(obj).is_integer() else float(obj)
-        raise TypeError
-    
-    return orjson.dumps(message.asdict(), option=option, default=default)
+    """Format a message as a JSON string.
+    The msgspec encoder is cached so it is
+    not created for every message.
+
+    Args:
+        message: The message to format.
+        option: 0 = json message
+                1 = json message with newline
+
+    Returns:
+        The formatted message.
+    """
+
+    if not ENCODER:
+        set_msgspec_encoder()
+
+    if option == 0:
+        return ENCODER.encode(message.asdict())
+    if option == 1:
+        ENCODER.encode_into(message.asdict(), msg_buffer)
+        msg_buffer.extend(b"\n")
+        return msg_buffer
+
+    raise Exception("Not implemented: 0=Standard, 1=Message with newline")
+
+
+def set_msgspec_encoder():
+    """Sets a JSON serializer encoder for all encoding.
+    Checks whether the use_singer_decimal setting has
+    been enabled to output decimals in a numeric format.
+
+    Default: Output decimals, floats in numeric format.
+    If use_singer_decimal = true output as strings.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+
+    global ENCODER  # pylint: disable=W0603
+    use_singer_decimal = u.get_singer_decimal_setting()
+
+    if use_singer_decimal:
+        ENCODER = msgspec.json.Encoder()
+        LOGGER.info(
+            "Singer Decimal Enabled! Floats and Decimals will be output as strings"
+        )
+    else:
+        ENCODER = msgspec.json.Encoder(decimal_format="number")
+
 
 def write_message(message):
-    sys.stdout.buffer.write(format_message(message, option=orjson.OPT_APPEND_NEWLINE))
+    """Writes the message to stdout. Before writing the
+    message it is formatted using the msgspec encoder. This
+    method outputs each message followed by newline.
+
+    Args:
+        message: The message to be serialized.
+
+    Returns:
+        None.
+    """
+    sys.stdout.buffer.write(format_message(message, option=1))
     sys.stdout.buffer.flush()
 
 
@@ -310,9 +405,13 @@ def write_record(stream_name, record, stream_alias=None, time_extracted=None):
 
     write_record("users", {"id": 2, "email": "mike@stitchdata.com"})
     """
-    write_message(RecordMessage(stream=(stream_alias or stream_name),
-                                record=record,
-                                time_extracted=time_extracted))
+    write_message(
+        RecordMessage(
+            stream=(stream_alias or stream_name),
+            record=record,
+            time_extracted=time_extracted,
+        )
+    )
 
 
 def write_records(stream_name, records):
@@ -326,25 +425,42 @@ def write_records(stream_name, records):
         write_record(stream_name, record)
 
 
-def write_schema(stream_name, schema, key_properties, bookmark_properties=None, stream_alias=None):
+def write_schema(
+    stream_name,
+    schema,
+    key_properties,
+    bookmark_properties=None,
+    stream_alias=None,
+):
     """Write a schema message.
 
     stream = 'test'
-    schema = {'properties': {'id': {'type': 'integer'}, 'email': {'type': 'string'}}}  # nopep8
+    schema = {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "email": {
+            "type": "string"
+          }
+        }
+      }
     key_properties = ['id']
     write_schema(stream, schema, key_properties)
     """
     if isinstance(key_properties, (str, bytes)):
         key_properties = [key_properties]
     if not isinstance(key_properties, list):
-        raise Exception('key_properties must be a string or list of strings')
+        raise Exception("key_properties must be a string or list of strings")
 
     write_message(
         SchemaMessage(
             stream=(stream_alias or stream_name),
             schema=schema,
             key_properties=key_properties,
-            bookmark_properties=bookmark_properties))
+            bookmark_properties=bookmark_properties,
+        )
+    )
 
 
 def write_state(value):
@@ -364,9 +480,14 @@ def write_version(stream_name, version):
     """
     write_message(ActivateVersionMessage(stream_name, version))
 
+
 def write_batch(
-    stream_name, filepath, file_format=None,
-    compression=None, batch_size=None, time_extracted=None
+    stream_name,
+    filepath,
+    file_format=None,
+    compression=None,
+    batch_size=None,
+    time_extracted=None,
 ):
     """Write a batch message.
 
@@ -383,6 +504,6 @@ def write_batch(
             file_format=file_format,
             compression=compression,
             batch_size=batch_size,
-            time_extracted=time_extracted
+            time_extracted=time_extracted,
         )
     )
